@@ -205,10 +205,20 @@ class Renderer: ObservableObject {
             throw VideoCompositionError.noValidVideos
         }
         
+        
         try? FileManager.default.removeItem(at: outputURL)
         guard let exportSession = AVAssetExportSession(
             asset: composition,
-            presetName: AVAssetExportPresetHighestQuality
+            /**
+             •    With AVAssetExportPresetHighestQuality, the system typically picks an
+             H.264 profile/level that is broadly compatible. Those internal preset settings
+             often clamp the frame rate to 30 fps for high-res outputs when re-encoding.
+             
+             •    With AVAssetExportPresetHEVCHighestQuality, the encoder is HEVC,
+             whose preset profiles on Apple hardware allow 60 fps at the same resolution,
+             so your videoComposition.frameDuration = 1/60 is honored
+             */
+            presetName: AVAssetExportPresetHEVCHighestQuality
         ) else {
             throw VideoCompositionError.trackCreationFailed
         }
