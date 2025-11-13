@@ -3,11 +3,13 @@ import SwiftUI
 
 @main
 struct SimpleEditorApp: App {
-    @State private var project = Project(name: "My Test Project test 2")
-    
     var body: some Scene {
         WindowGroup {
-          ProjectEditor(project: $project)
+            if let url = Bundle.main.url(forResource: "output", withExtension: "mp4") {
+                ProjectEditor(videoURL: url)
+            } else {
+                Text("Video not found in bundle")
+            }
         }
     }
 }

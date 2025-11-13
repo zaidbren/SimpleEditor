@@ -1,202 +1,132 @@
 import SwiftUI
-import AVKit
+import Foundation
+import AppKit
 import Combine
+import AVKit
 
 struct Project: Equatable {
-    var name: String
+    var backgroundColor: CIColor
+    var id = UUID()
+    
+    static func == (lhs: Project, rhs: Project) -> Bool {
+        return lhs.backgroundColor.red == rhs.backgroundColor.red &&
+               lhs.backgroundColor.green == rhs.backgroundColor.green &&
+               lhs.backgroundColor.blue == rhs.backgroundColor.blue &&
+               lhs.backgroundColor.alpha == rhs.backgroundColor.alpha
+    }
 }
 
 struct ProjectEditor: View {
-    @Binding var project: Project
+    @StateObject private var renderer: Renderer
+    @State private var selectedColor: Color = .red
+    @State private var player: AVPlayer?
     
-    @StateObject private var playerViewModel: VideoPlayerViewModel
-    
-    init(project: Binding<Project>) {
-        self._project = project
-        
-        _playerViewModel = StateObject(wrappedValue: VideoPlayerViewModel(project: project))
+    init(videoURL: URL) {
+        let initialProject = Project(backgroundColor: CIColor(red: 1, green: 0, blue: 0, alpha: 1))
+        _renderer = StateObject(wrappedValue: Renderer(project: initialProject, videoURL: videoURL))
     }
     
     var body: some View {
         VStack(spacing: 20) {
-            Form {
-                videoPlayerSection
+            if let playerItem = renderer.playerItem {
+                VideoPlayer(player: getOrCreatePlayer(with: playerItem))
+                    .frame(height: 400)
+                    .onAppear {
+                        player?.play()
+                    }
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .frame(height: 400)
+                    .overlay(Text("Loading..."))
+            }
+            
+            VStack(spacing: 15) {
+                Text("Background Color")
+                    .font(.headline)
                 
-            }
-        }
-        .padding()
-        .frame(minWidth: 600, minHeight: 500)
-        .task {
-            await playerViewModel.loadVideo()
-        }
-        .onChange(of: project) { oldValue, newValue in
-            Task {
-                await playerViewModel.updateProject(project)
-            }
-        }
-
-        .onDisappear {
-            playerViewModel.cleanup()
-        }
-    }
-    
-    
-    
-    private var videoPlayerSection: some View {
-        Section("Video Preview") {
-            VStack(spacing: 12) {
-                if playerViewModel.isLoading {
-                    ProgressView("Loading video...")
-                        .frame(height: 300)
-                } else if let error = playerViewModel.error {
-                    VStack(spacing: 8) {
-                        Image(systemName: "exclamationmark.triangle")
-                            .font(.largeTitle)
-                            .foregroundStyle(.red)
-                        Text("Error: \(error.localizedDescription)")
-                            .foregroundStyle(.secondary)
-                        
-                        Button("Retry") {
-                            Task { await playerViewModel.loadVideo() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .frame(height: 300)
-                } else if playerViewModel.hasVideo {
-                    VideoPlayer(player: playerViewModel.player)
-                        .frame(height: 400)
-                        .cornerRadius(8)
-                    
-                    HStack(spacing: 16) {
-                        Button(action: { playerViewModel.play() }) {
-                            Label("Play", systemImage: "play.fill")
-                        }
-                        
-                        Button(action: { playerViewModel.pause() }) {
-                            Label("Pause", systemImage: "pause.fill")
-                        }
-                        
-                        Button(action: { playerViewModel.reset() }) {
-                            Label("Reset", systemImage: "arrow.counterclockwise")
-                        }
-                        
-                        Spacer()
-                        
-                        Button(action: {
-                            Task { await playerViewModel.loadVideo() }
-                        }) {
-                            Label("Reload", systemImage: "arrow.clockwise")
-                        }
-                        
-                        Button("Export the video") {
-                            Task {
-                                let tempDir = FileManager.default.temporaryDirectory
-                                let outputURL = tempDir.appendingPathComponent("exported_video.mp4")
-                                print("Exporting to:", outputURL.path)
-                                await playerViewModel.exportVideo(outputURL)
-                                print("Export successful! Saved at:", outputURL)
-                            }
-                        }
-                        .buttonStyle(.bordered)
-                    }
-                    .buttonStyle(.bordered)
-                } else {
-                    VStack(spacing: 8) {
-                        Image(systemName: "video.slash")
-                            .font(.largeTitle)
-                            .foregroundStyle(.secondary)
-                        Text("No video composition loaded")
-                            .foregroundStyle(.secondary)
-                        
-                        Button("Load Video") {
-                            Task { await playerViewModel.loadVideo() }
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                    .frame(height: 300)
+                ColorPicker("Select Color", selection: $selectedColor)
+                    .padding(.horizontal)
+                
+                Button("Update Color") {
+                    updateColor()
+                }
+                .buttonStyle(.borderedProminent)
+                
+                HStack(spacing: 10) {
+                    ColorButton(color: .red) { updateColor(to: .red) }
+                    ColorButton(color: .green) { updateColor(to: .green) }
+                    ColorButton(color: .blue) { updateColor(to: .blue) }
+                    ColorButton(color: .yellow) { updateColor(to: .yellow) }
+                    ColorButton(color: .purple) { updateColor(to: .purple) }
                 }
             }
+            .padding()
+            .background(Color.gray.opacity(0.1))
+            .cornerRadius(10)
+            .padding()
+            
+            Text("💡 Change the color and seek through the video to see the compositor update in real-time")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        .onDisappear {
+            Task {
+                await renderer.cleanup()
+            }
         }
     }
     
-}
-
-// MARK: - Video Player ViewModel
-
-@MainActor
-class VideoPlayerViewModel: ObservableObject {
-    @Published var isLoading = false
-    @Published var error: Error?
-    @Published var hasVideo = false
-    
-    let player = AVPlayer()
-    private let renderer: Renderer
-    
-    init(project: Binding<Project>) {
-        self.renderer = Renderer(project: project.wrappedValue)
-    }
-    
-    func updateProject(_ project: Project) async {
-        await renderer.updateProject(project)
-    }
-    
-    func exportVideo(_ outputURL: URL) async {
-        do {
-            try await renderer.exportVideo(to: outputURL)
-            print("Export successful! to \(outputURL)")
-        } catch {
-            print("Export failed:", error)
+    private func getOrCreatePlayer(with playerItem: AVPlayerItem) -> AVPlayer {
+        if let existingPlayer = player {
+            return existingPlayer
         }
+        let newPlayer = AVPlayer(playerItem: playerItem)
+        player = newPlayer
+        return newPlayer
     }
     
-    func loadVideo() async {
-        isLoading = true
-        error = nil
-        hasVideo = false
+    private func updateColor(to color: Color? = nil) {
+        let targetColor = color ?? selectedColor
+        let uiColor = NSColor(targetColor)
+        let ciColor = CIColor(color: uiColor) ?? CIColor(red: 0, green: 0, blue: 0, alpha: 1)
         
-        await renderer.buildComposition()
-        
-        error = renderer.error
-        
-        if let playerItem = renderer.playerItem {
-            player.replaceCurrentItem(with: playerItem)
-            hasVideo = true
-        }
-        
-        isLoading = false
-    }
-    
-    func play() {
-        player.play()
-    }
-    
-    func pause() {
-        player.pause()
-    }
-    
-    func reset() {
-        player.seek(to: .zero)
-        player.pause()
-    }
-    
-    func cleanup() {
-        player.pause()
-        player.replaceCurrentItem(with: nil)
-        
-        Task { @MainActor [weak self] in
-            guard let self = self else { return }
-            await self.renderer.cleanup()
-        }
-    }
-    
-    nonisolated deinit {
-        let playerToClean = player
-        let rendererToClean = renderer
+        print("🎨 UI: Updating color to R:\(ciColor.red) G:\(ciColor.green) B:\(ciColor.blue)")
         
         Task { @MainActor in
-            playerToClean.pause()
-            playerToClean.replaceCurrentItem(with: nil)
-            await rendererToClean.cleanup()
+            let newProject = Project(backgroundColor: ciColor)
+            await renderer.updateProject(newProject)
+            
+            // Force the video to re-render by seeking to current time
+            if let player = player {
+                let currentTime = player.currentTime()
+                let wasPlaying = player.rate > 0
+                
+                // Seek to force frame re-render
+                await player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
+                
+                // Resume playback if it was playing
+                if wasPlaying {
+                    player.play()
+                }
+                
+                print("✅ UI: Sought to \(CMTimeGetSeconds(currentTime))s to refresh frame")
+            }
+        }
+    }
+}
+
+struct ColorButton: View {
+    let color: Color
+    let action: () -> Void
+    
+    var body: some View {
+        Button(action: action) {
+            RoundedRectangle(cornerRadius: 8)
+                .fill(color)
+                .frame(width: 50, height: 50)
         }
     }
 }
