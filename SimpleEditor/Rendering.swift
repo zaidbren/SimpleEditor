@@ -63,6 +63,46 @@ class Renderer: ObservableObject {
         print("✅ Renderer: Project updated successfully")
     }
     
+    func insertUserVideoTrack(from asset: AVAsset, track: AVAssetTrack) {
+        do {
+            let compositionTrack = composition.addMutableTrack(
+                withMediaType: .video,
+                preferredTrackID: kCMPersistentTrackID_Invalid
+            )
+
+            try compositionTrack?.insertTimeRange(
+                CMTimeRange(start: .zero, duration: asset.duration),
+                of: track,
+                at: .zero
+            )
+
+            if let audioTrack = asset.tracks(withMediaType: .audio).first {
+                let audioCompTrack = composition.addMutableTrack(
+                    withMediaType: .audio,
+                    preferredTrackID: kCMPersistentTrackID_Invalid
+                )
+
+                try audioCompTrack?.insertTimeRange(
+                    CMTimeRange(start: .zero, duration: asset.duration),
+                    of: audioTrack,
+                    at: .zero
+                )
+            }
+
+            DispatchQueue.main.async {
+                self.playerItem = AVPlayerItem(asset: self.composition)
+            }
+
+        } catch {
+            print("Error inserting track:", error)
+        }
+    }
+    
+    func forceRefresh() {
+           guard let playerItem = playerItem else { return }
+           playerItem.videoComposition = videoComposition
+    }
+    
     func cleanup() async {
         await CustomVideoCompositor.removeProject(forId: compositorId)
     }

@@ -7,8 +7,6 @@ struct SimpleEditorApp: App {
         WindowGroup {
             if let url = Bundle.main.url(forResource: "output", withExtension: "mp4") {
                 ProjectEditor(videoURL: url)
-            } else {
-                Text("Video not found in bundle")
             }
         }
     }
