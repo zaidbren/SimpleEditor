@@ -4,133 +4,100 @@ import AppKit
 import Combine
 import AVKit
 
-enum AspectRatio: Equatable {
-    case landscape   // 16:9
-    case portrait    // 9:16
-
-    var value: CGFloat {
-        switch self {
-        case .landscape:
-            return 16.0 / 9.0
-        case .portrait:
-            return 9.0 / 16.0
-        }
-    }
-}
-
 struct Project: Equatable {
-    var backgroundColor: CIColor
-    var aspectRatio: AspectRatio = .landscape
+    var isCut: Bool = false
     var id = UUID()
-
-    static func == (lhs: Project, rhs: Project) -> Bool {
-        return lhs.backgroundColor.red == rhs.backgroundColor.red &&
-               lhs.backgroundColor.green == rhs.backgroundColor.green &&
-               lhs.backgroundColor.blue == rhs.backgroundColor.blue &&
-               lhs.backgroundColor.alpha == rhs.backgroundColor.alpha &&
-               lhs.aspectRatio == rhs.aspectRatio
-    }
 }
 
 struct ProjectEditor: View {
     @StateObject private var renderer: Renderer
-    @State private var selectedColor: Color = .red
     @State private var player: AVPlayer?
-    
-    @State private var isImporting = false
-    
-    @State private var project = Project(
-        backgroundColor: CIColor(red: 1, green: 0, blue: 0, alpha: 1),
-        aspectRatio: .landscape
-    )
-
+    @State private var project = Project(isCut: false)
     
     init(videoURL: URL) {
-        let initialProject = Project(backgroundColor: CIColor(red: 1, green: 0, blue: 0, alpha: 1), aspectRatio: .landscape)
-        _renderer = StateObject(wrappedValue: Renderer(project: initialProject, videoURL: videoURL))
+        _renderer = StateObject(wrappedValue: Renderer(videoURL: videoURL))
     }
     
     var body: some View {
         VStack(spacing: 20) {
             if let player {
                 VideoPlayer(player: player)
-                    .aspectRatio(project.aspectRatio.value, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                    .aspectRatio(calculateAspectRatio(), contentMode: .fit)
+                    .frame(maxWidth: 800, maxHeight: 450)
                     .onAppear {
                         player.play()
                     }
             } else {
                 Rectangle()
                     .fill(Color.gray.opacity(0.3))
-                    .aspectRatio(project.aspectRatio.value, contentMode: .fit)
-                    .frame(maxWidth: .infinity)
+                    .aspectRatio(16/9, contentMode: .fit)
+                    .frame(maxWidth: 800, maxHeight: 450)
                     .overlay(Text("Loading..."))
             }
             
-            
             HStack(spacing: 12) {
                 Button {
-                    project.aspectRatio = .landscape
+                    project.isCut = true
                 } label: {
-                    Label("Landscape", systemImage: "rectangle")
+                    Label("Cut", systemImage: "scissors")
                 }
                 .buttonStyle(.bordered)
-                .tint(project.aspectRatio == .landscape ? .blue : .gray)
+                .tint(project.isCut ? .blue : .gray)
 
                 Button {
-                    project.aspectRatio = .portrait
+                    project.isCut = false
                 } label: {
-                    Label("Portrait", systemImage: "rectangle.portrait")
+                    Label("Uncut", systemImage: "arrow.uturn.backward")
                 }
                 .buttonStyle(.bordered)
-                .tint(project.aspectRatio == .portrait ? .blue : .gray)
+                .tint(!project.isCut ? .blue : .gray)
             }
         
-            Text("Try changing aspect ratio of the video player")
+            Text(project.isCut ? "3-5 seconds trimmed from video" : "Full video")
                 .font(.caption)
                 .foregroundColor(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal)
         }
+        .padding()
         .onDisappear {
             Task {
                 await renderer.cleanup()
             }
         }
         .onAppear {
-            if let playerItem = renderer.playerItem {
-                player = getOrCreatePlayer(with: playerItem)
+            Task {
+                await buildInitialComposition()
             }
         }
         .onChange(of: project) { oldValue, newValue in
             Task {
-                await renderer.updateProject(newValue)
-                renderer.forceRefresh()
+                await rebuildComposition()
             }
         }
     }
     
-    
-    private func getOrCreatePlayer(with playerItem: AVPlayerItem) -> AVPlayer {
-        if let existingPlayer = player {
-            return existingPlayer
+    private func calculateAspectRatio() -> CGFloat {
+        let size = renderer.compositionSize
+        guard size.width > 0 && size.height > 0 else {
+            return 16/9
         }
-        let newPlayer = AVPlayer(playerItem: playerItem)
-        player = newPlayer
-        return newPlayer
+        return size.width / size.height
     }
     
-}
-
-struct ColorButton: View {
-    let color: Color
-    let action: () -> Void
+    private func buildInitialComposition() async {
+        let playerItem = await renderer.buildComposition(isCut: project.isCut)
+        player = AVPlayer(playerItem: playerItem)
+    }
     
-    var body: some View {
-        Button(action: action) {
-            RoundedRectangle(cornerRadius: 8)
-                .fill(color)
-                .frame(width: 50, height: 50)
+    private func rebuildComposition() async {
+        let playerItem = await renderer.buildComposition(isCut: project.isCut)
+        
+        // Replace the player item
+        await MainActor.run {
+            player?.replaceCurrentItem(with: playerItem)
+            player?.seek(to: .zero)
+            player?.play()
         }
     }
 }
