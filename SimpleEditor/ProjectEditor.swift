@@ -4,15 +4,31 @@ import AppKit
 import Combine
 import AVKit
 
+enum AspectRatio: Equatable {
+    case landscape   // 16:9
+    case portrait    // 9:16
+
+    var value: CGFloat {
+        switch self {
+        case .landscape:
+            return 16.0 / 9.0
+        case .portrait:
+            return 9.0 / 16.0
+        }
+    }
+}
+
 struct Project: Equatable {
     var backgroundColor: CIColor
+    var aspectRatio: AspectRatio = .landscape
     var id = UUID()
-    
+
     static func == (lhs: Project, rhs: Project) -> Bool {
         return lhs.backgroundColor.red == rhs.backgroundColor.red &&
                lhs.backgroundColor.green == rhs.backgroundColor.green &&
                lhs.backgroundColor.blue == rhs.backgroundColor.blue &&
-               lhs.backgroundColor.alpha == rhs.backgroundColor.alpha
+               lhs.backgroundColor.alpha == rhs.backgroundColor.alpha &&
+               lhs.aspectRatio == rhs.aspectRatio
     }
 }
 
@@ -22,108 +38,78 @@ struct ProjectEditor: View {
     @State private var player: AVPlayer?
     
     @State private var isImporting = false
+    
+    @State private var project = Project(
+        backgroundColor: CIColor(red: 1, green: 0, blue: 0, alpha: 1),
+        aspectRatio: .landscape
+    )
 
     
     init(videoURL: URL) {
-        let initialProject = Project(backgroundColor: CIColor(red: 1, green: 0, blue: 0, alpha: 1))
+        let initialProject = Project(backgroundColor: CIColor(red: 1, green: 0, blue: 0, alpha: 1), aspectRatio: .landscape)
         _renderer = StateObject(wrappedValue: Renderer(project: initialProject, videoURL: videoURL))
     }
     
     var body: some View {
-            VStack(spacing: 20) {
-                if let player {
-                    VideoPlayer(player: player)
-                        .frame(height: 400)
-                        .onAppear {
-                            player.play()
-                        }
-                } else {
-                    Rectangle()
-                        .fill(Color.gray.opacity(0.3))
-                        .frame(height: 400)
-                        .overlay(Text("Loading..."))
-                }
-                
-//                VStack(spacing: 15) {
-//                    Text("Background Color")
-//                        .font(.headline)
-//                    
-//                    ColorPicker("Select Color", selection: $selectedColor)
-//                        .padding(.horizontal)
-//                    
-//                    Button("Update Color") {
-//                        updateColor()
-//                    }
-//                    .buttonStyle(.borderedProminent)
-//                    
-//                    HStack(spacing: 10) {
-//                        ColorButton(color: .red) { updateColor(to: .red) }
-//                        ColorButton(color: .green) { updateColor(to: .green) }
-//                        ColorButton(color: .blue) { updateColor(to: .blue) }
-//                        ColorButton(color: .yellow) { updateColor(to: .yellow) }
-//                        ColorButton(color: .purple) { updateColor(to: .purple) }
-//                    }
-//                }
-//                .padding()
-//                .background(Color.gray.opacity(0.1))
-//                .cornerRadius(10)
-                VStack {
-                    Button("Import your video") {
-                        isImporting = true
+        VStack(spacing: 20) {
+            if let player {
+                VideoPlayer(player: player)
+                    .aspectRatio(project.aspectRatio.value, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .onAppear {
+                        player.play()
                     }
-                }
-                .padding()
-                
-                Text("💡 Try importing a 30 second video")
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .multilineTextAlignment(.center)
-                    .padding(.horizontal)
+            } else {
+                Rectangle()
+                    .fill(Color.gray.opacity(0.3))
+                    .aspectRatio(project.aspectRatio.value, contentMode: .fit)
+                    .frame(maxWidth: .infinity)
+                    .overlay(Text("Loading..."))
             }
-            .onDisappear {
-                Task {
-                    await renderer.cleanup()
+            
+            
+            HStack(spacing: 12) {
+                Button {
+                    project.aspectRatio = .landscape
+                } label: {
+                    Label("Landscape", systemImage: "rectangle")
                 }
+                .buttonStyle(.bordered)
+                .tint(project.aspectRatio == .landscape ? .blue : .gray)
+
+                Button {
+                    project.aspectRatio = .portrait
+                } label: {
+                    Label("Portrait", systemImage: "rectangle.portrait")
+                }
+                .buttonStyle(.bordered)
+                .tint(project.aspectRatio == .portrait ? .blue : .gray)
             }
-            .onAppear {
-                if let playerItem = renderer.playerItem {
-                    player = getOrCreatePlayer(with: playerItem)
-                }
-            }
-            .fileImporter(
-                        isPresented: $isImporting,
-                        allowedContentTypes: [.movie, .video],
-                        allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first else { return }
-                    handlePickedVideo(url)
-                case .failure(let error):
-                    print("File import error:", error)
-                }
+        
+            Text("Try changing aspect ratio of the video player")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal)
+        }
+        .onDisappear {
+            Task {
+                await renderer.cleanup()
             }
         }
+        .onAppear {
+            if let playerItem = renderer.playerItem {
+                player = getOrCreatePlayer(with: playerItem)
+            }
+        }
+        .onChange(of: project) { oldValue, newValue in
+            Task {
+                await renderer.updateProject(newValue)
+                renderer.forceRefresh()
+            }
+        }
+    }
     
-    private func handlePickedVideo(_ url: URL) {
-            guard url.startAccessingSecurityScopedResource() else {
-                print("Failed to access security-scoped resource")
-                return
-            }
-
-            let asset = AVURLAsset(url: url)
-            let videoTracks = asset.tracks(withMediaType: .video)
-
-            guard let firstVideoTrack = videoTracks.first else {
-                print("No video track found")
-                url.stopAccessingSecurityScopedResource()
-                return
-            }
-
-            renderer.insertUserVideoTrack(from: asset, track: firstVideoTrack)
-
-            url.stopAccessingSecurityScopedResource()
-        }
     
     private func getOrCreatePlayer(with playerItem: AVPlayerItem) -> AVPlayer {
         if let existingPlayer = player {
@@ -134,35 +120,6 @@ struct ProjectEditor: View {
         return newPlayer
     }
     
-    private func updateColor(to color: Color? = nil) {
-            let targetColor = color ?? selectedColor
-            let uiColor = NSColor(targetColor)
-            let ciColor = CIColor(color: uiColor) ?? CIColor(red: 0, green: 0, blue: 0, alpha: 1)
-            
-            print("🎨 UI: Updating color to R:\(ciColor.red) G:\(ciColor.green) B:\(ciColor.blue)")
-           
-            
-            Task { @MainActor in
-                let newProject = Project(backgroundColor: ciColor)
-                await renderer.updateProject(newProject)
-                // Force the video composition to trigger cache invalidation
-                renderer.forceRefresh()
-                // Force the video to re-render by seeking to current time
-                if let player = player {
-                    let currentTime = player.currentTime()
-                    let wasPlaying = player.rate > 0
-                    
-                    await player.seek(to: currentTime, toleranceBefore: .zero, toleranceAfter: .zero)
-                    
-                    // Resume playback if it was playing
-                    if wasPlaying {
-                        player.play()
-                    }
-                    
-                    print("✅ UI: Sought to \(CMTimeGetSeconds(currentTime))s to refresh frame")
-                }
-            }
-        }
 }
 
 struct ColorButton: View {

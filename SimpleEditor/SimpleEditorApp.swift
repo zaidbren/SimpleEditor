@@ -8,6 +8,8 @@ struct SimpleEditorApp: App {
             if let url = Bundle.main.url(forResource: "output", withExtension: "mp4") {
                 ProjectEditor(videoURL: url)
             }
+            else {
+            }
         }
     }
 }
